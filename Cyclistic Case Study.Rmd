@@ -1,0 +1,271 @@
+---
+title: "Ciclistic Case Study - Difference Between User Types"
+author: "Sebastian Minaya"
+date: "5/1/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Introduction to the Case Study
+
+On this brief project I have the role as a Data Analyst for Cyclistic, a bike-share company based in Chicago. The marketing team believes that the companies growth depends on maximizing the number of annual memberships. The final goal of this project is to **find insights on the data that would help in the creation of a new marketing campaign to convert casual riders, our users that doesn't have a membership yet, to members.**
+
+
+Therefore, the question to answer on this scenario is: 
+
+####How does the members and casual riders use our service differently? 
+
+##Data Sources for this Scenario
+
+As of today, Cyclistic has saved on the cloud 12 .csv files for each of the past months (April 2020 to March 2021) which will be downloaded to my computer and then erased to ensure that there is no data leaked. 
+
+In order to upload all the data, and for future steps of our work, I already open the following R libraries:
+
+```{r echo = FALSE}
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(lubridate)
+library(geosphere) 
+```
+
+After that we go to the folder where all the data is secured, change or current working directory to the files path and upload it into a single data set using the following code on a script:
+
+for (data in list.files()){
+  
+  # Create the first data if no data exist yet
+  if (!exists("dataset")){
+    dataset <- read.csv(data, header=TRUE)
+  }
+  
+  # if data already exist, then append it together
+  if (exists("dataset")){
+    tempory <-read.csv(data, header=TRUE)
+    dataset <-unique(rbind(dataset, tempory))
+    rm(tempory)
+  }
+}
+
+We check on the dataset to see each column type:
+
+```{r echo=TRUE}
+head(dataset)
+```
+
+##Data Transformation Process
+
+We change realize on some preprocessing, which code will not be displayed that we need to do four first transformations on the dataset.
+
+1. Rename member_casual to user_status
+2. Create a new column called tdiff which will be the difference between the start and end time of each ride
+3. Create a new column called ss which will identify with 1 that the trip started and ended on the same station
+4. Create a new weekday column which will be helpful on future analysis
+
+The transformation is done on the following pipeline:
+
+```{r echo = FALSE}
+dataset <- dataset %>% 
+  rename(user_status = member_casual) %>% 
+  mutate(tdiff = difftime(started_at,ended_at,units = "mins")) %>% 
+  mutate(ss = ifelse(start_station_id == end_station_id, 1, 0)) %>% 
+  mutate(weekday = wday(started_at,label = TRUE))
+```
+
+After this step, we realize that some columns are not in the right order making the tdiff column have negative and possitive values which will affect the analysis.
+
+For that we create two dummy datasets filtering on the tdiff column values and then bind:
+
+```{r echo = FALSE}
+dummy_pos <- dataset %>% 
+  filter(tdiff > 0) %>% 
+  relocate(started_at, .after = ended_at) %>% 
+  rename(dummy = ended_at) %>% 
+  rename(ended_at = started_at) %>% 
+  rename(started_at = dummy)%>% 
+  mutate(tdiff = difftime(started_at,ended_at,units = "mins"))
+
+dummy_neg <- dataset %>% 
+  filter(tdiff < 0)
+
+dataset <- rbind(dummy_neg,dummy_pos)
+```
+
+The final step for this first transformation is to change the value of the tdiff column from negative to positive and on minutes as unit:
+
+```{r echo = FALSE}
+dataset <- dataset %>% 
+  mutate(tdiff = -as.numeric(tdiff, units = "mins"))
+```
+
+The second and last trasnformation could take sometime as we will use a loop, which in R is not recommended, to create a last column called distance:
+
+```{r echo = FALSE}
+distance = c()
+
+i <- 1
+
+for (i in 1:nrow(dataset)) {
+  
+  distance[i] <- distm(c(dataset[i,9],dataset[i,10]), c(dataset[i,11], dataset[i,12]), fun = distHaversine)
+  
+}
+
+dataset <- cbind(dataset,distance)
+```
+
+With this we finished our data transformation and can move forward, but ending with seeing the end result with the following code:
+
+```{r}
+View(head(dataset))
+```
+
+##Analysis and Visualizations
+
+We first will check on the whole dataset:
+
+```{r}
+dataset %>% 
+  group_by(user_status) %>% 
+  summarize(mean_dist = mean(distance),
+            max_dist = max(distance),
+            mean_time = mean(tdiff),
+            max_time = max(tdiff),
+            min_time = min(tdiff))
+```
+
+Right now our whole dataset will slow down our calculations so we will take a sample of 385 observations, each sample has 95% confidence and 5% margin of error for the whole dataset that contains 3'346,217 observations.
+
+```{r echo = FALSE}
+sample_1 <- sample_n(dataset, 385)
+```
+
+We check on the summary of the sample:
+
+```{r}
+summary(sample_1)
+```
+
+Now we will do some aggregations based solely on the user_status:
+
+```{r}
+aggregate(sample_1$tdiff~sample_1$user_status, FUN = mean)
+
+aggregate(sample_1$tdiff~sample_1$user_status, FUN = median)
+
+aggregate(sample_1$tdiff~sample_1$user_status, FUN = max)
+
+aggregate(sample_1$tdiff~sample_1$user_status, FUN = min)
+```
+
+And on both the user_status and the weekday:
+
+```{r}
+aggregate(sample_1$tdiff~sample_1$user_status + sample_1$weekday, FUN = mean)
+```
+
+Both aggregations helped us have a better look on the data. Now we will create a pipeline in order to check on three things:
+
+1. The total rides during each day per user type
+2. The average duration during each day per user type
+3. The average distance during each day per user type
+
+We check on the three things with the following code:
+
+```{r}
+sample_1 %>% 
+  group_by(user_status, weekday) %>% 
+  summarise(total_rides = n(),
+            average_duration = mean(tdiff),
+            average_distance = mean(distance)) %>% 
+  arrange(user_status,weekday) 
+```
+
+After that we will visualize the three variables to see the different behaviour each user type has more clearly:
+
+####Total rides per User during a week
+
+```{r}
+sample_1 %>% 
+  group_by(user_status, weekday) %>% 
+  summarise(number_of_rides = n(),
+            average_duration = mean(tdiff),
+            average_distance = mean(distance)) %>% 
+  arrange(user_status,weekday) %>% 
+  ggplot(aes(x = weekday, y = number_of_rides, fill = user_status)) +
+  geom_col(position = "dodge")
+```
+
+####Average duration per User during a week
+
+```{r}
+sample_1 %>% 
+  group_by(user_status, weekday) %>% 
+  summarise(number_of_rides = n(),
+            average_duration = mean(tdiff),
+            average_distance = mean(distance)) %>% 
+  arrange(user_status,weekday) %>% 
+  ggplot(aes(x = weekday, y = average_duration, fill = user_status)) +
+  geom_col(position = "dodge")
+```
+
+####Average distance per User during a week
+
+```{r}
+sample_1 %>% 
+  group_by(user_status, weekday) %>% 
+  summarise(number_of_rides = n(),
+            average_duration = mean(tdiff),
+            average_distance = mean(distance)) %>% 
+  arrange(user_status,weekday) %>% 
+  ggplot(aes(x = weekday, y = average_distance, fill = user_status)) +
+  geom_col(position = "dodge")
+```
+
+We have some conclusions based on the three visualizations:
+
+1. Members use our service much more during the week than casual riders and both have peaks during the weekend. This could mean that casual riders may think that paying for a one time service could be a waste of money and members take advantage on their current status to use our service as much as they can.
+
+2. Casual riders have an average duration much higher than members, which have a similar duration during all the week. This could mean that casual riders take as much advantage of single rides as possible to avoid renting multiple times while members have brief rides without that in mind.
+
+3. Distance  traveled doesn't show much information of the behavior of each user. The distance could have no impact on it. Further analysis would be needed.
+
+The final output on our analysis is by checking both the same station (ss) and rideable type variables. We check on what is the duration of rides taking in consideration both variables with the following code:
+
+```{r}
+ggplot(data = sample_1) +
+  geom_col(mapping = 
+             aes(x = ss,
+                 y = tdiff,
+                 fill = user_status), 
+           position = "dodge") +
+  facet_wrap(~rideable_type)
+```
+
+By looking at the visualization we believe that the people using docked bikes and use the same station as starting and ending points would be a nice niche to focus first so we check on the ride ids for further analysis on the users in the future
+
+```{r}
+niche <- dataset %>% 
+  filter(ss == 1) %>% 
+  filter(rideable_type == "docked_bike")
+
+View(niche)
+```
+
+##Conclusions
+
+We answered the question stated at the beginning checking on the three main variables (total rides, average duration and distance) that give us a global view on how the each user type behaves. At the end we also check a bit further on a specific niche to check first which would be helpful for an specific mailing camping for the users that use docked bikes and tend to return to the same station after using our service.
+
+Now my three recommendations based on the analysis and results are:
+
+1. There should be further analysis on the reason behind the less rides of the service during th week and the peak on the weekend of casual riders. My hypothesis is, taking in consideration the results of the average duration, that casual riders try to use as much as they can the service on single rides. The message of the marketing campaign could be linked to that but further research could be needed to accept said hypothesis.
+
+2. More data is needed to identify which rides are of new and older users. There is the chance that many of the beginning of the year ride were from casual riders that are already members by this time of the passed year. Looking for more data and considering this for future analysis would be a good idea.
+
+3. Researching deeper on the niche and the reason behind their specific behavior could lead to an increase in the conversion rate. Doing user research on the filtered data set is advised in order to identify the message for this specific group. My hypothesis is that the niche likely use it for leisure and live near each station. The advertising on each of this stations could maybe have a separate message than the first conclusion.
+
+####Thank you for checking on my case study! You can connect with me on LinkedIn following [this link](https://www.linkedin.com/in/sebastian-minaya/).
